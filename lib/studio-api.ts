@@ -3,7 +3,7 @@ import { supabase } from "./supabase";
 type ProductRow = { id: number; name: string; purchase_price_cents: number; total_amount: number; unit: string; use_per_service: number };
 type ClientRow = { id: number; name: string; phone: string | null; notes: string | null; created_at: string };
 type AppointmentStatus = "scheduled" | "confirmed" | "completed" | "cancelled";
-type AppointmentRow = { id: number; client_id: number | null; client_name: string; service: string; service_date: string; service_time: string | null; status: AppointmentStatus; amount_cents: number; product_cost_cents: number; extra_cost_cents: number; payment_fee_cents: number };
+type AppointmentRow = { id: number; client_id: number | null; client_name: string; service: string; service_date: string; service_time: string | null; status: AppointmentStatus; amount_cents: number; product_ids: number[] | null; product_cost_cents: number; extra_cost_cents: number; payment_fee_cents: number };
 type PaymentKind = "deposit" | "partial" | "final" | "full";
 type PaymentRow = { id: number; appointment_id: number; amount_cents: number; kind: PaymentKind; paid_at: string; note: string | null };
 type ExpenseRow = { id: number; description: string; category: string; expense_date: string; amount_cents: number };
@@ -15,7 +15,7 @@ export type StudioBackup = {
   exportedAt: string;
   clients: Array<{ sourceId: number; name: string; phone: string; notes: string; createdAt: string }>;
   products: Array<{ sourceId: number; name: string; purchasePriceCents: number; totalAmount: number; unit: string; usePerService: number }>;
-  appointments: Array<{ sourceId: number; clientId: number | null; clientName: string; service: string; serviceDate: string; serviceTime: string; status: AppointmentStatus; amountCents: number; productCostCents: number; extraCostCents: number; paymentFeeCents: number }>;
+  appointments: Array<{ sourceId: number; clientId: number | null; clientName: string; service: string; serviceDate: string; serviceTime: string; status: AppointmentStatus; amountCents: number; productIds: number[]; productCostCents: number; extraCostCents: number; paymentFeeCents: number }>;
   payments: Array<{ sourceId: number; appointmentId: number; amountCents: number; kind: PaymentKind; paidAt: string; note: string }>;
   expenses: Array<{ sourceId: number; description: string; category: string; expenseDate: string; amountCents: number }>;
   settings: { monthlyGoalCents: number; reservePercent: number };
@@ -30,6 +30,36 @@ function fail(error: { message: string } | null) {
   if (error) throw new Error(error.message || "Não foi possível acessar os dados.");
 }
 
+function costPerUseCents(product: Pick<ProductRow, "purchase_price_cents" | "total_amount" | "use_per_service">) {
+  return Math.round((product.purchase_price_cents / Number(product.total_amount)) * Number(product.use_per_service));
+}
+
+function productPayload(payload: Record<string, unknown>) {
+  const name = String(payload.name ?? "").trim();
+  const purchasePriceCents = Number(payload.purchasePriceCents);
+  const totalAmount = Number(payload.totalAmount);
+  const unit = String(payload.unit ?? "");
+  const usePerService = Number(payload.usePerService);
+  if (!name) throw new Error("Informe o nome do produto.");
+  if (!Number.isInteger(purchasePriceCents) || purchasePriceCents <= 0) throw new Error("Informe um preço válido para o produto.");
+  if (!Number.isFinite(totalAmount) || totalAmount <= 0) throw new Error("Informe a quantidade da embalagem.");
+  if (!Number.isFinite(usePerService) || usePerService <= 0) throw new Error("Informe o uso médio por atendimento.");
+  if (!["ml", "g", "un."].includes(unit)) throw new Error("Escolha uma unidade válida.");
+  return { name, purchase_price_cents: purchasePriceCents, total_amount: totalAmount, unit, use_per_service: usePerService };
+}
+
+async function productSelection(value: unknown) {
+  const productIds = [...new Set(Array.isArray(value) ? value.filter((item): item is number => Number.isInteger(item) && item > 0) : [])];
+  if (!productIds.length) return { productIds, productCostCents: 0 };
+  const result = await supabase.from("products").select("id,purchase_price_cents,total_amount,use_per_service").in("id", productIds);
+  fail(result.error);
+  if ((result.data ?? []).length !== productIds.length) throw new Error("Um dos produtos selecionados não está mais disponível.");
+  return {
+    productIds,
+    productCostCents: (result.data ?? []).reduce((sum, item) => sum + costPerUseCents(item), 0),
+  };
+}
+
 function productFromRow(item: ProductRow) {
   return {
     id: item.id,
@@ -38,7 +68,7 @@ function productFromRow(item: ProductRow) {
     totalAmount: Number(item.total_amount),
     unit: item.unit,
     usePerService: Number(item.use_per_service),
-    costPerUseCents: Math.round((item.purchase_price_cents / Number(item.total_amount)) * Number(item.use_per_service)),
+    costPerUseCents: costPerUseCents(item),
   };
 }
 
@@ -54,6 +84,7 @@ function appointmentFromRow(item: AppointmentRow, payments: PaymentRow[]) {
     serviceTime: item.service_time?.slice(0, 5) ?? "",
     status: item.status,
     amountCents: item.amount_cents,
+    productIds: item.product_ids ?? [],
     productCostCents: item.product_cost_cents,
     extraCostCents: item.extra_cost_cents,
     paymentFeeCents: item.payment_fee_cents,
@@ -77,7 +108,7 @@ export async function getStudioData() {
   const [clientsResult, productsResult, appointmentsResult, paymentsResult, expensesResult, settingsResult] = await Promise.all([
     supabase.from("clients").select("id,name,phone,notes,created_at").order("name", { ascending: true }),
     supabase.from("products").select("id,name,purchase_price_cents,total_amount,unit,use_per_service").order("created_at", { ascending: false }),
-    supabase.from("appointments").select("id,client_id,client_name,service,service_date,service_time,status,amount_cents,product_cost_cents,extra_cost_cents,payment_fee_cents").order("service_date", { ascending: false }).order("service_time", { ascending: false }).order("id", { ascending: false }),
+    supabase.from("appointments").select("id,client_id,client_name,service,service_date,service_time,status,amount_cents,product_ids,product_cost_cents,extra_cost_cents,payment_fee_cents").order("service_date", { ascending: false }).order("service_time", { ascending: false }).order("id", { ascending: false }),
     supabase.from("payments").select("id,appointment_id,amount_cents,kind,paid_at,note").order("paid_at", { ascending: false }).order("created_at", { ascending: false }),
     supabase.from("expenses").select("id,description,category,expense_date,amount_cents").order("expense_date", { ascending: false }),
     supabase.from("studio_settings").select("monthly_goal_cents,reserve_percent").maybeSingle(),
@@ -203,10 +234,12 @@ export async function importStudioBackup(backup: StudioBackup): Promise<StudioIm
   }
 
   const knownProducts = [...current.products];
+  const productIds = new Map<number, number>();
   const matchedProductIds = new Set<number>();
   for (const product of backup.products) {
     const existing = findImportMatch(knownProducts, product, matchedProductIds, productMatchKey);
     if (existing) {
+      productIds.set(product.sourceId, existing.id);
       matchedProductIds.add(existing.id);
       kept += 1;
       continue;
@@ -222,6 +255,7 @@ export async function importStudioBackup(backup: StudioBackup): Promise<StudioIm
     if (!result.data) throw new Error("Não foi possível confirmar um produto importado.");
     const inserted = productFromRow(result.data as ProductRow);
     knownProducts.push(inserted);
+    productIds.set(product.sourceId, inserted.id);
     matchedProductIds.add(inserted.id);
     added += 1;
   }
@@ -245,10 +279,11 @@ export async function importStudioBackup(backup: StudioBackup): Promise<StudioIm
       service_time: appointment.serviceTime || null,
       status: appointment.status,
       amount_cents: appointment.amountCents,
+      product_ids: appointment.productIds.map((id) => productIds.get(id)).filter((id): id is number => id !== undefined),
       product_cost_cents: appointment.productCostCents,
       extra_cost_cents: appointment.extraCostCents,
       payment_fee_cents: appointment.paymentFeeCents,
-    }).select("id,client_id,client_name,service,service_date,service_time,status,amount_cents,product_cost_cents,extra_cost_cents,payment_fee_cents").single();
+    }).select("id,client_id,client_name,service,service_date,service_time,status,amount_cents,product_ids,product_cost_cents,extra_cost_cents,payment_fee_cents").single();
     fail(result.error);
     const inserted = result.data as AppointmentRow | null;
     if (!inserted) throw new Error("Não foi possível confirmar um atendimento importado.");
@@ -342,13 +377,7 @@ export async function studioRequest(url: string, init?: RequestInit) {
   const path = new URL(url, window.location.origin);
 
   if (method === "POST" && path.pathname.endsWith("/appointments")) {
-    const productIds = Array.isArray(payload.productIds) ? payload.productIds.filter((value): value is number => Number.isInteger(value)) : [];
-    let productCostCents = 0;
-    if (productIds.length) {
-      const result = await supabase.from("products").select("purchase_price_cents,total_amount,use_per_service").in("id", productIds);
-      fail(result.error);
-      productCostCents = (result.data ?? []).reduce((sum, item) => sum + Math.round((item.purchase_price_cents / Number(item.total_amount)) * Number(item.use_per_service)), 0);
-    }
+    const { productIds, productCostCents } = await productSelection(payload.productIds);
     const clientId = Number(payload.clientId);
     const clientResult = await supabase.from("clients").select("id,name").eq("id", clientId).maybeSingle();
     fail(clientResult.error);
@@ -359,7 +388,7 @@ export async function studioRequest(url: string, init?: RequestInit) {
     const result = await supabase.from("appointments").insert({
       client_id: clientResult.data.id, client_name: clientResult.data.name, service: String(payload.service ?? "").trim(), service_date: payload.serviceDate,
       service_time: payload.serviceTime, status: "scheduled",
-      amount_cents: amountCents, product_cost_cents: productCostCents,
+      amount_cents: amountCents, product_ids: productIds, product_cost_cents: productCostCents,
       extra_cost_cents: Math.max(0, Number(payload.extraCostCents ?? 0)), payment_fee_cents: Math.max(0, Number(payload.paymentFeeCents ?? 0)),
     }).select("id").single();
     fail(result.error);
@@ -403,7 +432,7 @@ export async function studioRequest(url: string, init?: RequestInit) {
     if (!clientResult.data) throw new Error("Escolha uma cliente cadastrada.");
     const paidCents = (paymentsResult.data ?? []).reduce((sum, payment) => sum + payment.amount_cents, 0);
     if (amountCents < paidCents) throw new Error("O valor do atendimento não pode ser menor que o total já recebido.");
-    const result = await supabase.from("appointments").update({
+    const update: Record<string, unknown> = {
       client_id: clientResult.data.id,
       client_name: clientResult.data.name,
       service,
@@ -412,7 +441,13 @@ export async function studioRequest(url: string, init?: RequestInit) {
       amount_cents: amountCents,
       extra_cost_cents: Math.max(0, Number(payload.extraCostCents ?? 0)),
       payment_fee_cents: Math.max(0, Number(payload.paymentFeeCents ?? 0)),
-    }).eq("id", appointmentId);
+    };
+    if (payload.productsChanged === true) {
+      const { productIds, productCostCents } = await productSelection(payload.productIds);
+      update.product_ids = productIds;
+      update.product_cost_cents = productCostCents;
+    }
+    const result = await supabase.from("appointments").update(update).eq("id", appointmentId);
     fail(result.error); return { ok: true };
   }
 
@@ -488,8 +523,17 @@ export async function studioRequest(url: string, init?: RequestInit) {
   }
 
   if (method === "POST" && path.pathname.endsWith("/products")) {
-    const result = await supabase.from("products").insert({ name: String(payload.name ?? "").trim(), purchase_price_cents: payload.purchasePriceCents, total_amount: payload.totalAmount, unit: payload.unit, use_per_service: payload.usePerService });
+    const result = await supabase.from("products").insert(productPayload(payload));
     fail(result.error); return { ok: true };
+  }
+
+  if (method === "PUT" && path.pathname.endsWith("/products")) {
+    const productId = Number(payload.id);
+    if (!Number.isInteger(productId) || productId <= 0) throw new Error("Produto inválido.");
+    const result = await supabase.from("products").update(productPayload(payload)).eq("id", productId).select("id").single();
+    fail(result.error);
+    if (result.data?.id !== productId) throw new Error("Não foi possível confirmar a alteração do produto.");
+    return { ok: true };
   }
 
   if (method === "PUT" && path.pathname.endsWith("/settings")) {
