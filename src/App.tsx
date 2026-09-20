@@ -1,10 +1,10 @@
 import { FormEvent, lazy, Suspense, useEffect, useState } from "react";
 import type { Session } from "@supabase/supabase-js";
 import { Loader2, LockKeyhole, Sparkles } from "lucide-react";
-import { supabase, supabaseConfigured } from "../lib/supabase";
-import { StudioBrand } from "./studio-brand";
+import { StudioBrand } from "@/components/studio-brand";
+import { supabase, supabaseConfigured } from "@/lib/supabase";
 
-const StudioDashboard = lazy(() => import("../app/studio-dashboard").then((module) => ({ default: module.StudioDashboard })));
+const StudioDashboard = lazy(() => import("@/features/studio/studio-dashboard").then((module) => ({ default: module.StudioDashboard })));
 const isTestEnvironment = import.meta.env.VITE_APP_ENV === "test";
 
 export default function App() {
