@@ -28,7 +28,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Toaster } from "@/components/ui/sonner";
 import { getStudioData, importStudioBackup, studioRequest, type StudioBackup } from "@/lib/studio-api";
 import { supabase } from "@/lib/supabase";
-import { StudioBrand } from "@/src/studio-brand";
+import { StudioBrand } from "@/components/studio-brand";
 
 type Product = { id: number; name: string; purchasePriceCents: number; totalAmount: number; unit: string; usePerService: number; costPerUseCents: number };
 type Client = { id: number; name: string; phone: string; notes: string; createdAt: string };

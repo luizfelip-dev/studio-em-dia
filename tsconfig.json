@@ -16,8 +16,8 @@
     "noEmit": true,
     "jsx": "react-jsx",
     "baseUrl": ".",
-    "paths": { "@/*": ["./*"] },
+    "paths": { "@/*": ["./src/*"] },
     "types": ["vite/client"]
   },
-  "include": ["src", "app/studio-dashboard.tsx", "vite.config.ts"]
+  "include": ["src", "vite.config.ts"]
 }

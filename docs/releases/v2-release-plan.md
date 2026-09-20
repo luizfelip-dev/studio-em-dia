@@ -1,12 +1,14 @@
 # Publicação segura da V2
 
+> Documento histórico. A V2 foi publicada com sucesso em setembro de 2026 e os dados existentes foram preservados.
+
 Este plano preserva os dados da V1 e mantém o site oficial funcionando até a aprovação final.
 
 ## Antes da publicação
 
 1. Exportar os dados pelo site e gerar um backup do projeto Supabase.
 2. Executar `supabase/validation/v2_preflight.sql` e guardar o resultado.
-3. Aplicar `supabase/migrations/20260919021943_v2_safe_upgrade.sql` primeiro no banco de testes.
+3. Aplicar `supabase/migrations/20260919024346_v2_safe_upgrade.sql` primeiro no banco de testes.
 4. Executar `supabase/validation/v2_postflight.sql`.
 5. Confirmar que produtos, atendimentos, gastos e configurações mantiveram as mesmas quantidades.
 6. Testar login, clientes, agenda, pagamentos, gastos, produtos e configurações.
