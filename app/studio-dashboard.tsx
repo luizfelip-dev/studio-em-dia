@@ -35,7 +35,7 @@ type Client = { id: number; name: string; phone: string; notes: string; createdA
 type AppointmentStatus = "scheduled" | "confirmed" | "completed" | "cancelled";
 type PaymentKind = "deposit" | "partial" | "final" | "full";
 type Payment = { id: number; amountCents: number; kind: PaymentKind; paidAt: string; note: string };
-type Appointment = { id: number; clientId: number | null; clientName: string; service: string; serviceDate: string; serviceTime: string; status: AppointmentStatus; amountCents: number; productCostCents: number; extraCostCents: number; paymentFeeCents: number; totalCostCents: number; profitCents: number; paidCents: number; pendingCents: number; payments: Payment[] };
+type Appointment = { id: number; clientId: number | null; clientName: string; service: string; serviceDate: string; serviceTime: string; status: AppointmentStatus; amountCents: number; productIds: number[]; productCostCents: number; extraCostCents: number; paymentFeeCents: number; totalCostCents: number; profitCents: number; paidCents: number; pendingCents: number; payments: Payment[] };
 type Expense = { id: number; description: string; category: string; expenseDate: string; amountCents: number };
 type StudioSettings = { monthlyGoalCents: number; reservePercent: number };
 type StudioData = { clients: Client[]; products: Product[]; appointments: Appointment[]; expenses: Expense[]; settings: StudioSettings };
@@ -233,6 +233,10 @@ function validateBackupRecord(type: string, value: unknown) {
     const status = backupString(item.status, "status", 20) as AppointmentStatus;
     if (!Object.hasOwn(APPOINTMENT_STATUS, status)) throw new Error("Status de atendimento inválido no backup.");
     const clientId = item.clientId === null ? null : backupId(item.clientId, "cliente do atendimento");
+    const rawProductIds = item.productIds ?? [];
+    if (!Array.isArray(rawProductIds) || rawProductIds.length > 500) throw new Error("Lista de produtos inválida no backup.");
+    const productIds = rawProductIds.map((id) => backupId(id, "produto do atendimento"));
+    if (new Set(productIds).size !== productIds.length) throw new Error("O backup possui produtos repetidos em um atendimento.");
     return {
       sourceId: backupId(item.sourceId, "atendimento"), clientId,
       clientName: backupString(item.clientName, "cliente do atendimento", 120),
@@ -240,6 +244,7 @@ function validateBackupRecord(type: string, value: unknown) {
       serviceDate: backupDate(item.serviceDate, "atendimento"),
       serviceTime: backupTime(item.serviceTime, "atendimento"), status,
       amountCents: backupNumber(item.amountCents, "valor do atendimento", { integer: true, min: 1 }),
+      productIds,
       productCostCents: backupNumber(item.productCostCents, "custo de produtos", { integer: true }),
       extraCostCents: backupNumber(item.extraCostCents, "custo extra", { integer: true }),
       paymentFeeCents: backupNumber(item.paymentFeeCents, "taxa de pagamento", { integer: true }),
@@ -310,8 +315,10 @@ async function readBackupFile(file: File): Promise<StudioBackup> {
   assertUniqueSourceIds(backup.payments, "pagamentos");
   assertUniqueSourceIds(backup.expenses, "gastos");
   const clientIds = new Set(backup.clients.map((item) => item.sourceId));
+  const productIds = new Set(backup.products.map((item) => item.sourceId));
   const appointmentIds = new Set(backup.appointments.map((item) => item.sourceId));
   if (backup.appointments.some((item) => item.clientId !== null && !clientIds.has(item.clientId))) throw new Error("O backup contém um atendimento sem cliente correspondente.");
+  if (backup.appointments.some((item) => item.productIds.some((id) => !productIds.has(id)))) throw new Error("O backup contém um atendimento com produto desconhecido.");
   if (backup.payments.some((item) => !appointmentIds.has(item.appointmentId))) throw new Error("O backup contém um pagamento sem atendimento correspondente.");
   const paidByAppointment = new Map<number, number>();
   backup.payments.forEach((payment) => paidByAppointment.set(payment.appointmentId, (paidByAppointment.get(payment.appointmentId) ?? 0) + payment.amountCents));
@@ -419,7 +426,7 @@ async function downloadBackup(data: StudioData) {
       systemSheet.addRow(["appointment", JSON.stringify({
         sourceId: item.id, clientId: item.clientId, clientName: item.clientName, service: item.service,
         serviceDate: item.serviceDate, serviceTime: item.serviceTime, status: item.status,
-        amountCents: item.amountCents, productCostCents: item.productCostCents,
+        amountCents: item.amountCents, productIds: item.productIds, productCostCents: item.productCostCents,
         extraCostCents: item.extraCostCents, paymentFeeCents: item.paymentFeeCents,
       })]);
       item.payments.forEach((payment) => systemSheet.addRow(["payment", JSON.stringify({ sourceId: payment.id, appointmentId: item.id, amountCents: payment.amountCents, kind: payment.kind, paidAt: payment.paidAt, note: payment.note })]));
@@ -456,6 +463,7 @@ export function StudioDashboard({ userEmail, onSignOut, testEnvironment = false 
   const [editingClient, setEditingClient] = useState<Client | null>(null);
   const [expenseOpen, setExpenseOpen] = useState(false);
   const [productOpen, setProductOpen] = useState(false);
+  const [editingProduct, setEditingProduct] = useState<Product | null>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [passwordOpen, setPasswordOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget>(null);
@@ -632,9 +640,9 @@ export function StudioDashboard({ userEmail, onSignOut, testEnvironment = false 
           </TabsContent>
 
           <TabsContent value="produtos" className="page-content">
-            <PageHeading title="Produtos" description="Informe o preço e o uso médio. O custo por atendimento é calculado sozinho." action="Cadastrar produto" onAction={() => setProductOpen(true)} />
-            {data?.products.length ? <section className="product-grid">{data.products.map((product) => <article className="product-card" key={product.id}><div className="product-card-top"><div className="product-icon"><Box /></div><button className="icon-button" type="button" aria-label={`Excluir produto ${product.name}`} onClick={() => setDeleteTarget({ type: "products", id: product.id, name: product.name })}><Trash2 /></button></div><h2>{product.name}</h2><p>{product.totalAmount} {product.unit} · uso médio de {product.usePerService} {product.unit}</p><div className="product-cost"><span>Custo por atendimento</span><strong>{money(product.costPerUseCents)}</strong></div></article>)}</section>
-            : <section className="panel list-panel"><EmptyState icon={<PackagePlus />} title="Cadastre os produtos usados" text="Assim o custo de cada maquiagem será calculado automaticamente." action="Cadastrar produto" onAction={() => setProductOpen(true)} /></section>}
+            <PageHeading title="Produtos" description="Informe o preço e o uso médio. O custo por atendimento é calculado sozinho." action="Cadastrar produto" onAction={() => { setEditingProduct(null); setProductOpen(true); }} />
+            {data?.products.length ? <section className="product-grid">{data.products.map((product) => <article className="product-card" key={product.id}><div className="product-card-top"><div className="product-icon"><Box /></div><div className="row-actions"><button className="icon-button" type="button" aria-label={`Editar produto ${product.name}`} onClick={() => { setEditingProduct(product); setProductOpen(true); }}><Pencil /></button><button className="icon-button" type="button" aria-label={`Excluir produto ${product.name}`} onClick={() => setDeleteTarget({ type: "products", id: product.id, name: product.name })}><Trash2 /></button></div></div><h2>{product.name}</h2><p>{product.totalAmount} {product.unit} · uso médio de {product.usePerService} {product.unit}</p><div className="product-cost"><span>Custo por atendimento</span><strong>{money(product.costPerUseCents)}</strong></div></article>)}</section>
+            : <section className="panel list-panel"><EmptyState icon={<PackagePlus />} title="Cadastre os produtos usados" text="Assim o custo de cada maquiagem será calculado automaticamente." action="Cadastrar produto" onAction={() => { setEditingProduct(null); setProductOpen(true); }} /></section>}
           </TabsContent>
         </>}
       </main>
@@ -643,7 +651,7 @@ export function StudioDashboard({ userEmail, onSignOut, testEnvironment = false 
       <PaymentDialog appointment={paymentAppointment} onOpenChange={(open) => { if (!open) setPaymentAppointment(null); }} onSaved={loadData} />
       <ClientDialog open={clientOpen} onOpenChange={setClientOpen} client={editingClient} onSaved={loadData} />
       <ExpenseDialog open={expenseOpen} onOpenChange={setExpenseOpen} onSaved={loadData} />
-      <ProductDialog open={productOpen} onOpenChange={setProductOpen} onSaved={loadData} />
+      <ProductDialog open={productOpen} onOpenChange={(open) => { setProductOpen(open); if (!open) setEditingProduct(null); }} product={editingProduct} onSaved={loadData} />
       <SettingsDialog open={settingsOpen} onOpenChange={setSettingsOpen} data={data ?? { clients: [], products: [], appointments: [], expenses: [], settings: { monthlyGoalCents: 500000, reservePercent: 10 } }} onSaved={loadData} onChangePassword={() => { setSettingsOpen(false); setPasswordOpen(true); }} />
       <PasswordDialog open={passwordOpen} onOpenChange={setPasswordOpen} />
       <AlertDialog open={Boolean(deleteTarget)} onOpenChange={(open) => { if (!open) setDeleteTarget(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Excluir este registro?</AlertDialogTitle><AlertDialogDescription>{deleteTarget ? `“${deleteTarget.name}” será excluído. Essa ação não pode ser desfeita.` : ""}</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancelar</AlertDialogCancel><AlertDialogAction onClick={(event) => { event.preventDefault(); void deleteItem(); }} disabled={saving} className="delete-action">{saving ? <Loader2 className="animate-spin" /> : <Trash2 />} Excluir</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
@@ -725,14 +733,53 @@ function ClientDialog({ open, onOpenChange, client, onSaved }: { open: boolean; 
 }
 
 function AppointmentDialog({ open, onOpenChange, appointment, clients, products, onSaved, onAddClient }: { open: boolean; onOpenChange: (open: boolean) => void; appointment: Appointment | null; clients: Client[]; products: Product[]; onSaved: () => Promise<void>; onAddClient: () => void }) {
-  const [selected, setSelected] = useState<number[]>([]); const [selectedServices, setSelectedServices] = useState<string[]>([]); const [saving, setSaving] = useState(false);
+  const [selected, setSelected] = useState<number[]>([]);
+  const [productsChanged, setProductsChanged] = useState(false);
+  const [selectedServices, setSelectedServices] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
   useEffect(() => {
     if (!open) return;
-    setSelected([]);
+    setSelected(appointment?.productIds ?? []);
+    setProductsChanged(false);
     setSelectedServices(appointment ? appointment.service.split(" + ").filter(Boolean) : []);
   }, [open, appointment]);
   const productCost = products.filter((item) => selected.includes(item.id)).reduce((sum, item) => sum + item.costPerUseCents, 0);
-  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); if (!selectedServices.length) { toast.error("Escolha pelo menos um serviço."); return; } const formElement = event.currentTarget; const form = new FormData(formElement); setSaving(true); try { await requestJson("/api/appointments", { method: appointment ? "PUT" : "POST", body: JSON.stringify({ id: appointment?.id, clientId: Number(form.get("clientId")), service: selectedServices.join(" + "), serviceDate: form.get("serviceDate"), serviceTime: form.get("serviceTime"), amountCents: cents(String(form.get("amount") ?? "")), depositCents: appointment ? 0 : cents(String(form.get("deposit") ?? "")), depositPaidAt: todayInput(), extraCostCents: cents(String(form.get("extraCost") ?? "")), paymentFeeCents: cents(String(form.get("paymentFee") ?? "")), productIds: appointment ? [] : selected }) }); toast.success(appointment ? "Atendimento atualizado." : "Atendimento agendado. Os valores já foram calculados."); formElement.reset(); setSelected([]); setSelectedServices([]); onOpenChange(false); await onSaved(); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível salvar."); } finally { setSaving(false); } };
+  const legacyProductCost = Boolean(appointment && appointment.productIds.length === 0 && appointment.productCostCents > 0);
+  const displayedProductCost = appointment && !productsChanged ? appointment.productCostCents : productCost;
+  const submit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedServices.length) { toast.error("Escolha pelo menos um serviço."); return; }
+    const formElement = event.currentTarget;
+    const form = new FormData(formElement);
+    setSaving(true);
+    try {
+      await requestJson("/api/appointments", {
+        method: appointment ? "PUT" : "POST",
+        body: JSON.stringify({
+          id: appointment?.id,
+          clientId: Number(form.get("clientId")),
+          service: selectedServices.join(" + "),
+          serviceDate: form.get("serviceDate"),
+          serviceTime: form.get("serviceTime"),
+          amountCents: cents(String(form.get("amount") ?? "")),
+          depositCents: appointment ? 0 : cents(String(form.get("deposit") ?? "")),
+          depositPaidAt: todayInput(),
+          extraCostCents: cents(String(form.get("extraCost") ?? "")),
+          paymentFeeCents: cents(String(form.get("paymentFee") ?? "")),
+          productIds: selected,
+          productsChanged: appointment ? productsChanged : true,
+        }),
+      });
+      toast.success(appointment ? "Atendimento atualizado." : "Atendimento agendado. Os valores já foram calculados.");
+      formElement.reset();
+      setSelected([]);
+      setProductsChanged(false);
+      setSelectedServices([]);
+      onOpenChange(false);
+      await onSaved();
+    } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível salvar."); }
+    finally { setSaving(false); }
+  };
   return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="form-dialog"><DialogHeader><DialogTitle>{appointment ? "Editar atendimento" : "Novo atendimento"}</DialogTitle><DialogDescription>{appointment ? "Altere cliente, serviços, data, horário ou valores quando precisar." : "Preencha o básico. Os cálculos são feitos automaticamente."}</DialogDescription></DialogHeader><form key={appointment?.id ?? "new"} onSubmit={submit} className="form-grid">
     <Field id="clientId" label="Cliente"><Select name="clientId" required disabled={!clients.length} defaultValue={appointment?.clientId ? String(appointment.clientId) : undefined}><SelectTrigger id="clientId" className="field-control"><SelectValue placeholder={clients.length ? "Selecione a cliente" : "Cadastre uma cliente primeiro"} /></SelectTrigger><SelectContent>{clients.map((client) => <SelectItem key={client.id} value={String(client.id)}>{client.name}</SelectItem>)}</SelectContent></Select>{!clients.length ? <button className="inline-create-button" type="button" onClick={() => { onOpenChange(false); onAddClient(); }}><UserPlus /> Cadastrar cliente agora</button> : null}</Field>
     <div className="product-picker service-picker"><div className="product-picker-heading"><div><strong>Serviços</strong><span>Escolha um ou mais serviços</span></div></div>{SERVICES.map((service) => <label className="product-option service-option" key={service}><Checkbox checked={selectedServices.includes(service)} onCheckedChange={(checked) => setSelectedServices((current) => checked ? [...current, service] : current.filter((item) => item !== service))} /><span>{service}</span></label>)}</div>
@@ -742,7 +789,7 @@ function AppointmentDialog({ open, onOpenChange, appointment, clients, products,
     {!appointment ? <Field id="deposit" label="Sinal recebido" hint="Deixe em branco se ainda não recebeu"><div className="money-input"><span>R$</span><input id="deposit" name="deposit" inputMode="decimal" placeholder="0,00" /></div></Field> : null}
     <Field id="extraCost" label="Outros custos" hint="Ex.: deslocamento ou cílios"><div className="money-input"><span>R$</span><input id="extraCost" name="extraCost" inputMode="decimal" placeholder="0,00" defaultValue={appointment ? (appointment.extraCostCents / 100).toFixed(2).replace(".", ",") : ""} /></div></Field>
     <Field id="paymentFee" label="Taxa de pagamento" hint="Taxa da maquininha, se houver"><div className="money-input"><span>R$</span><input id="paymentFee" name="paymentFee" inputMode="decimal" placeholder="0,00" defaultValue={appointment ? (appointment.paymentFeeCents / 100).toFixed(2).replace(".", ",") : ""} /></div></Field>
-    {appointment ? <div className="cost-preview"><span>Custo de produtos preservado</span><strong>{money(appointment.productCostCents)}</strong></div> : <div className="product-picker"><div className="product-picker-heading"><div><strong>Produtos usados</strong><span>Marque o que entrou neste atendimento</span></div><strong>{money(productCost)}</strong></div>{products.length ? products.map((product) => <label className="product-option" key={product.id}><Checkbox checked={selected.includes(product.id)} onCheckedChange={(checked) => setSelected((current) => checked ? [...current, product.id] : current.filter((id) => id !== product.id))} /><span>{product.name}</span><strong>{money(product.costPerUseCents)}</strong></label>) : <p className="picker-empty">Nenhum produto cadastrado ainda. Você pode salvar o atendimento mesmo assim.</p>}</div>}
+    <div className="product-picker"><div className="product-picker-heading"><div><strong>Produtos usados</strong><span>Marque apenas o que foi realmente usado neste atendimento</span></div><strong>{money(displayedProductCost)}</strong></div>{legacyProductCost && !productsChanged ? <p className="legacy-product-warning">Este atendimento foi criado antes da lista de produtos existir. O custo antigo será preservado; para corrigi-lo, marque todos os produtos usados.</p> : null}{products.length ? products.map((product) => <label className="product-option" key={product.id}><Checkbox checked={selected.includes(product.id)} onCheckedChange={(checked) => { setProductsChanged(true); setSelected((current) => checked ? [...new Set([...current, product.id])] : current.filter((id) => id !== product.id)); }} /><span>{product.name}</span><strong>{money(product.costPerUseCents)}</strong></label>) : <p className="picker-empty">Nenhum produto cadastrado ainda. Você pode salvar o atendimento mesmo assim.</p>}</div>
     <DialogFooter className="form-footer"><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? <Loader2 className="animate-spin" /> : appointment ? <Pencil /> : <Banknote />} {appointment ? "Salvar alterações" : "Salvar atendimento"}</Button></DialogFooter>
   </form></DialogContent></Dialog>;
 }
@@ -759,19 +806,28 @@ function ExpenseDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenC
   </form></DialogContent></Dialog>;
 }
 
-function ProductDialog({ open, onOpenChange, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; onSaved: () => Promise<void> }) {
-  const [saving, setSaving] = useState(false); const [preview, setPreview] = useState({ price: "", total: "", use: "" });
+function ProductDialog({ open, onOpenChange, product, onSaved }: { open: boolean; onOpenChange: (open: boolean) => void; product: Product | null; onSaved: () => Promise<void> }) {
+  const [saving, setSaving] = useState(false);
+  const [preview, setPreview] = useState({ price: "", total: "", use: "" });
+  useEffect(() => {
+    if (!open) return;
+    setPreview(product ? {
+      price: (product.purchasePriceCents / 100).toFixed(2).replace(".", ","),
+      total: String(product.totalAmount).replace(".", ","),
+      use: String(product.usePerService).replace(".", ","),
+    } : { price: "", total: "", use: "" });
+  }, [open, product]);
   const total = Number(preview.total.replace(",", ".")); const use = Number(preview.use.replace(",", "."));
   const previewCost = total > 0 && use > 0 ? Math.round((cents(preview.price) / total) * use) : 0;
-  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); setSaving(true); try { await requestJson("/api/products", { method: "POST", body: JSON.stringify({ name: form.get("productName"), purchasePriceCents: cents(String(form.get("productPrice") ?? "")), totalAmount: Number(String(form.get("totalAmount") ?? "").replace(",", ".")), unit: form.get("unit"), usePerService: Number(String(form.get("usePerService") ?? "").replace(",", ".")) }) }); toast.success("Produto cadastrado e custo calculado."); formElement.reset(); setPreview({ price: "", total: "", use: "" }); onOpenChange(false); await onSaved(); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível salvar."); } finally { setSaving(false); } };
-  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="form-dialog"><DialogHeader><DialogTitle>Cadastrar produto</DialogTitle><DialogDescription>Use as informações da embalagem. Não precisa fazer nenhuma conta.</DialogDescription></DialogHeader><form onSubmit={submit} className="form-grid">
-    <Field id="productName" label="Nome do produto"><input className="field-control" id="productName" name="productName" required placeholder="Ex.: Base líquida" /></Field>
+  const submit = async (event: FormEvent<HTMLFormElement>) => { event.preventDefault(); const formElement = event.currentTarget; const form = new FormData(formElement); setSaving(true); try { await requestJson("/api/products", { method: product ? "PUT" : "POST", body: JSON.stringify({ id: product?.id, name: form.get("productName"), purchasePriceCents: cents(String(form.get("productPrice") ?? "")), totalAmount: Number(String(form.get("totalAmount") ?? "").replace(",", ".")), unit: form.get("unit"), usePerService: Number(String(form.get("usePerService") ?? "").replace(",", ".")) }) }); toast.success(product ? "Produto atualizado. Os atendimentos antigos não foram alterados." : "Produto cadastrado e custo calculado."); formElement.reset(); setPreview({ price: "", total: "", use: "" }); onOpenChange(false); await onSaved(); } catch (error) { toast.error(error instanceof Error ? error.message : "Não foi possível salvar."); } finally { setSaving(false); } };
+  return <Dialog open={open} onOpenChange={onOpenChange}><DialogContent className="form-dialog"><DialogHeader><DialogTitle>{product ? "Editar produto" : "Cadastrar produto"}</DialogTitle><DialogDescription>{product ? "A alteração vale para os próximos cálculos. Atendimentos antigos mantêm o custo registrado." : "Use as informações da embalagem. Não precisa fazer nenhuma conta."}</DialogDescription></DialogHeader><form key={product?.id ?? "new"} onSubmit={submit} className="form-grid">
+    <Field id="productName" label="Nome do produto"><input className="field-control" id="productName" name="productName" required placeholder="Ex.: Base líquida" defaultValue={product?.name ?? ""} /></Field>
     <Field id="productPrice" label="Preço pago"><div className="money-input"><span>R$</span><input id="productPrice" name="productPrice" inputMode="decimal" placeholder="80,00" required value={preview.price} onChange={(e) => setPreview({ ...preview, price: e.target.value })} /></div></Field>
     <Field id="totalAmount" label="Quantidade da embalagem"><input className="field-control" id="totalAmount" name="totalAmount" inputMode="decimal" required placeholder="30" value={preview.total} onChange={(e) => setPreview({ ...preview, total: e.target.value })} /></Field>
-    <Field id="unit" label="Unidade"><Select name="unit" defaultValue="ml"><SelectTrigger id="unit" className="field-control"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ml">ml</SelectItem><SelectItem value="g">gramas</SelectItem><SelectItem value="un.">unidades</SelectItem></SelectContent></Select></Field>
+    <Field id="unit" label="Unidade"><Select name="unit" defaultValue={product?.unit ?? "ml"}><SelectTrigger id="unit" className="field-control"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="ml">ml</SelectItem><SelectItem value="g">gramas</SelectItem><SelectItem value="un.">unidades</SelectItem></SelectContent></Select></Field>
     <Field id="usePerService" label="Uso médio por atendimento" hint="Uma estimativa já é suficiente"><input className="field-control" id="usePerService" name="usePerService" inputMode="decimal" required placeholder="1" value={preview.use} onChange={(e) => setPreview({ ...preview, use: e.target.value })} /></Field>
-    <div className="cost-preview"><span>Custo estimado por atendimento</span><strong>{money(Number.isFinite(previewCost) ? previewCost : 0)}</strong></div>
-    <DialogFooter className="form-footer"><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? <Loader2 className="animate-spin" /> : <PackagePlus />} Salvar produto</Button></DialogFooter>
+    <div className="cost-preview"><span>Custo por atendimento: preço ÷ quantidade × uso médio</span><strong>{money(Number.isFinite(previewCost) ? previewCost : 0)}</strong></div>
+    <DialogFooter className="form-footer"><Button type="button" variant="ghost" onClick={() => onOpenChange(false)}>Cancelar</Button><Button type="submit" disabled={saving}>{saving ? <Loader2 className="animate-spin" /> : product ? <Pencil /> : <PackagePlus />} {product ? "Salvar alterações" : "Salvar produto"}</Button></DialogFooter>
   </form></DialogContent></Dialog>;
 }
 
