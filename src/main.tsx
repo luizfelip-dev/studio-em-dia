@@ -1,5 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
+import { ThemeProvider } from "next-themes";
 import App from "./App";
 import "@/styles/globals.css";
 
@@ -25,6 +26,14 @@ window.addEventListener("load", () => window.setTimeout(() => sessionStorage.rem
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    <ThemeProvider
+      attribute="class"
+      defaultTheme="system"
+      enableSystem
+      enableColorScheme
+      storageKey="studio-em-dia:theme"
+    >
+      <App />
+    </ThemeProvider>
   </StrictMode>,
 );
