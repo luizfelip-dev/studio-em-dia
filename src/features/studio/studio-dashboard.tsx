@@ -4,9 +4,10 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import {
   ArrowDownRight, ArrowUpRight, Banknote, Box, CalendarDays, CalendarPlus, ChevronLeft, Clock3,
   ChevronRight, CircleDollarSign, LayoutDashboard, Loader2, PackagePlus,
-  Download, KeyRound, LogOut, MessageCircle, Pencil, Phone, PiggyBank, Plus, Printer, ReceiptText, Settings, Target, Upload,
+  Download, KeyRound, LogOut, MessageCircle, Monitor, Moon, Pencil, Phone, PiggyBank, Plus, Printer, ReceiptText, Settings, Sun, Target, Upload,
   Trash2, UserPlus, Users, WalletCards,
 } from "lucide-react";
+import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import {
   AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent,
@@ -550,7 +551,7 @@ export function StudioDashboard({ userEmail, onSignOut, testEnvironment = false 
           <TabsTrigger value="gastos"><ReceiptText /><span>Gastos</span></TabsTrigger>
           <TabsTrigger value="produtos"><Box /><span>Produtos</span></TabsTrigger>
         </TabsList>
-        <div className="sidebar-actions"><button className="settings-link" type="button" onClick={() => setSettingsOpen(true)}><Settings aria-hidden="true" /><span>Meta e reserva</span></button><button className="logout-link" type="button" onClick={onSignOut} title={userEmail}><LogOut aria-hidden="true" /><span>Sair</span></button></div>
+        <div className="sidebar-actions"><button className="settings-link" type="button" onClick={() => setSettingsOpen(true)}><Settings aria-hidden="true" /><span>Configurações</span></button><button className="logout-link" type="button" onClick={onSignOut} title={userEmail}><LogOut aria-hidden="true" /><span>Sair</span></button></div>
       </aside>
 
       <main className="workspace">
@@ -832,6 +833,7 @@ function ProductDialog({ open, onOpenChange, product, onSaved }: { open: boolean
 }
 
 function SettingsDialog({ open, onOpenChange, data, onSaved, onChangePassword }: { open: boolean; onOpenChange: (open: boolean) => void; data: StudioData; onSaved: () => Promise<void>; onChangePassword: () => void }) {
+  const { theme = "system", setTheme } = useTheme();
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
   const [pendingBackup, setPendingBackup] = useState<StudioBackup | null>(null);
@@ -869,7 +871,19 @@ function SettingsDialog({ open, onOpenChange, data, onSaved, onChangePassword }:
     } finally { setImporting(false); }
   };
   const totalPending = pendingBackup ? pendingBackup.clients.length + pendingBackup.products.length + pendingBackup.appointments.length + pendingBackup.payments.length + pendingBackup.expenses.length : 0;
-  return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !importing) { setPendingBackup(null); setBackupFileName(""); } onOpenChange(nextOpen); }}><DialogContent className="form-dialog form-dialog--small"><DialogHeader><DialogTitle>Meta, backup e segurança</DialogTitle><DialogDescription>Gerencie as preferências e mantenha uma cópia dos dados do studio.</DialogDescription></DialogHeader><form onSubmit={submit} className="form-grid">
+  const themeOptions = [
+    { value: "light", label: "Claro", icon: Sun },
+    { value: "dark", label: "Escuro", icon: Moon },
+    { value: "system", label: "Automático", icon: Monitor },
+  ] as const;
+  return <Dialog open={open} onOpenChange={(nextOpen) => { if (!nextOpen && !importing) { setPendingBackup(null); setBackupFileName(""); } onOpenChange(nextOpen); }}><DialogContent className="form-dialog form-dialog--small"><DialogHeader><DialogTitle>Preferências e segurança</DialogTitle><DialogDescription>Personalize a aparência, ajuste suas metas e mantenha seus dados protegidos.</DialogDescription></DialogHeader><form onSubmit={submit} className="form-grid">
+    <fieldset className="appearance-box">
+      <legend>Aparência</legend>
+      <p>Escolha o visual do site. No automático, ele acompanha o iPhone ou o computador.</p>
+      <div className="theme-options" role="group" aria-label="Tema do site">
+        {themeOptions.map(({ value, label, icon: Icon }) => <button key={value} className="theme-option" type="button" aria-pressed={theme === value} onClick={() => setTheme(value)}><Icon aria-hidden="true" /><span>{label}</span></button>)}
+      </div>
+    </fieldset>
     <Field id="monthlyGoal" label="Meta de faturamento mensal"><div className="money-input"><span>R$</span><input id="monthlyGoal" name="monthlyGoal" inputMode="decimal" required defaultValue={(data.settings.monthlyGoalCents / 100).toFixed(2).replace(".", ",")} /></div></Field>
     <Field id="reservePercent" label="Porcentagem para reserva" hint="Ex.: 10 significa guardar 10% do faturamento"><div className="percent-input"><input id="reservePercent" name="reservePercent" type="number" min="0" max="100" step="0.5" defaultValue={data.settings.reservePercent} required /><span>%</span></div></Field>
     <div className="backup-box"><div><strong>Exportar dados</strong><span>Baixe manualmente um arquivo Excel organizado em abas, com resumo, clientes, atendimentos, pagamentos, gastos, produtos e configurações.</span></div><Button type="button" variant="outline" onClick={() => void downloadBackup(data)}><Download /> Exportar Excel</Button></div>
