@@ -128,247 +128,26 @@ export async function getStudioData() {
   };
 }
 
-function normalizedText(value: string) {
-  return value.trim().toLocaleLowerCase("pt-BR").replace(/\s+/g, " ");
-}
-
-function clientMatchKey(client: { name: string; phone: string }) {
-  return `${normalizedText(client.name)}|${client.phone.replace(/\D/g, "")}`;
-}
-
-function productMatchKey(product: { name: string; purchasePriceCents: number; totalAmount: number; unit: string; usePerService: number }) {
-  return [normalizedText(product.name), product.purchasePriceCents, product.totalAmount, product.unit, product.usePerService].join("|");
-}
-
-function appointmentMatchKey(appointment: { clientName: string; service: string; serviceDate: string; serviceTime: string; amountCents: number }) {
-  return [normalizedText(appointment.clientName), normalizedText(appointment.service), appointment.serviceDate, appointment.serviceTime, appointment.amountCents].join("|");
-}
-
-function expenseMatchKey(expense: { description: string; category: string; expenseDate: string; amountCents: number }) {
-  return [normalizedText(expense.description), normalizedText(expense.category), expense.expenseDate, expense.amountCents].join("|");
-}
-
-function paymentMatchKey(payment: { amountCents: number; kind: PaymentKind; paidAt: string; note: string }) {
-  return [payment.amountCents, payment.kind, payment.paidAt, normalizedText(payment.note)].join("|");
-}
-
-function findImportMatch<T extends { id: number }, U extends { sourceId: number }>(
-  existingItems: T[],
-  importedItem: U,
-  matchedIds: Set<number>,
-  matchKey: (item: T | U) => string,
-) {
-  const importedKey = matchKey(importedItem);
-  return existingItems.find((item) => !matchedIds.has(item.id) && item.id === importedItem.sourceId && matchKey(item) === importedKey)
-    ?? existingItems.find((item) => !matchedIds.has(item.id) && matchKey(item) === importedKey);
-}
-
-function validatePaymentMerge(current: Awaited<ReturnType<typeof getStudioData>>, backup: StudioBackup) {
-  const matchedAppointmentIds = new Set<number>();
-  const existingBySourceId = new Map<number, (typeof current.appointments)[number]>();
-
-  for (const importedAppointment of backup.appointments) {
-    const existing = findImportMatch(current.appointments, importedAppointment, matchedAppointmentIds, appointmentMatchKey);
-    if (!existing) continue;
-    matchedAppointmentIds.add(existing.id);
-    existingBySourceId.set(importedAppointment.sourceId, existing);
-  }
-
-  for (const importedAppointment of backup.appointments) {
-    const existingAppointment = existingBySourceId.get(importedAppointment.sourceId);
-    if (!existingAppointment) continue;
-
-    const matchedPaymentIds = new Set<number>();
-    let mergedPaidCents = existingAppointment.paidCents;
-    for (const importedPayment of backup.payments.filter((payment) => payment.appointmentId === importedAppointment.sourceId)) {
-      const existingPayment = findImportMatch(existingAppointment.payments, importedPayment, matchedPaymentIds, paymentMatchKey);
-      if (existingPayment) {
-        matchedPaymentIds.add(existingPayment.id);
-        continue;
-      }
-      mergedPaidCents += importedPayment.amountCents;
-    }
-
-    if (mergedPaidCents > existingAppointment.amountCents) {
-      throw new Error(`A mesclagem deixaria o valor recebido de ${existingAppointment.clientName} acima do valor do atendimento. Revise os pagamentos desse backup antes de importar.`);
-    }
-  }
-}
-
 export async function importStudioBackup(backup: StudioBackup): Promise<StudioImportResult> {
-  if (backup.format !== "studio-em-dia" || backup.version !== 1) throw new Error("Este arquivo não é um backup compatível do Studio em Dia.");
   const { data: authData, error: authError } = await supabase.auth.getUser();
   fail(authError);
   if (!authData.user) throw new Error("Entre novamente antes de importar o backup.");
 
-  const current = await getStudioData();
-  validatePaymentMerge(current, backup);
-  let added = 0;
-  let kept = 0;
-
-  const clientIds = new Map<number, number>();
-  const knownClients = [...current.clients];
-  const matchedClientIds = new Set<number>();
-  for (const client of backup.clients) {
-    const existing = findImportMatch(knownClients, client, matchedClientIds, clientMatchKey);
-    if (existing) {
-      clientIds.set(client.sourceId, existing.id);
-      matchedClientIds.add(existing.id);
-      kept += 1;
-      continue;
+  // Uma chamada, uma transação. Nunca voltar à importação antiga por etapas.
+  const { data, error } = await supabase.rpc("import_studio_backup", { backup });
+  if (error) {
+    if (error.code === "PGRST202") {
+      throw new Error("A importação segura ainda não está disponível neste ambiente. Nenhum dado foi importado.");
     }
-    const result = await supabase.from("clients").insert({
-      name: client.name,
-      phone: client.phone || null,
-      notes: client.notes || null,
-      created_at: client.createdAt,
-    }).select("id,name,phone,notes,created_at").single();
-    fail(result.error);
-    const inserted = result.data as ClientRow | null;
-    if (!inserted) throw new Error("Não foi possível confirmar uma cliente importada.");
-    const mapped = clientFromRow(inserted);
-    knownClients.push(mapped);
-    clientIds.set(client.sourceId, mapped.id);
-    matchedClientIds.add(mapped.id);
-    added += 1;
-  }
-
-  const knownProducts = [...current.products];
-  const productIds = new Map<number, number>();
-  const matchedProductIds = new Set<number>();
-  for (const product of backup.products) {
-    const existing = findImportMatch(knownProducts, product, matchedProductIds, productMatchKey);
-    if (existing) {
-      productIds.set(product.sourceId, existing.id);
-      matchedProductIds.add(existing.id);
-      kept += 1;
-      continue;
+    if (!error.code || error.message.toLowerCase().includes("fetch")) {
+      throw new Error("Não foi possível confirmar a importação. Quando a conexão voltar, repita o mesmo arquivo: ele não será importado duas vezes.");
     }
-    const result = await supabase.from("products").insert({
-      name: product.name,
-      purchase_price_cents: product.purchasePriceCents,
-      total_amount: product.totalAmount,
-      unit: product.unit,
-      use_per_service: product.usePerService,
-    }).select("id,name,purchase_price_cents,total_amount,unit,use_per_service").single();
-    fail(result.error);
-    if (!result.data) throw new Error("Não foi possível confirmar um produto importado.");
-    const inserted = productFromRow(result.data as ProductRow);
-    knownProducts.push(inserted);
-    productIds.set(product.sourceId, inserted.id);
-    matchedProductIds.add(inserted.id);
-    added += 1;
+    throw new Error(error.message || "Não foi possível importar o arquivo.");
   }
-
-  const appointmentIds = new Map<number, number>();
-  const knownAppointments = [...current.appointments];
-  const matchedAppointmentIds = new Set<number>();
-  for (const appointment of backup.appointments) {
-    const existing = findImportMatch(knownAppointments, appointment, matchedAppointmentIds, appointmentMatchKey);
-    if (existing) {
-      appointmentIds.set(appointment.sourceId, existing.id);
-      matchedAppointmentIds.add(existing.id);
-      kept += 1;
-      continue;
-    }
-    const result = await supabase.from("appointments").insert({
-      client_id: appointment.clientId === null ? null : clientIds.get(appointment.clientId) ?? null,
-      client_name: appointment.clientName,
-      service: appointment.service,
-      service_date: appointment.serviceDate,
-      service_time: appointment.serviceTime || null,
-      status: appointment.status,
-      amount_cents: appointment.amountCents,
-      product_ids: appointment.productIds.map((id) => productIds.get(id)).filter((id): id is number => id !== undefined),
-      product_cost_cents: appointment.productCostCents,
-      extra_cost_cents: appointment.extraCostCents,
-      payment_fee_cents: appointment.paymentFeeCents,
-    }).select("id,client_id,client_name,service,service_date,service_time,status,amount_cents,product_ids,product_cost_cents,extra_cost_cents,payment_fee_cents").single();
-    fail(result.error);
-    const inserted = result.data as AppointmentRow | null;
-    if (!inserted) throw new Error("Não foi possível confirmar um atendimento importado.");
-    const mapped = appointmentFromRow(inserted, []);
-    knownAppointments.push(mapped);
-    appointmentIds.set(appointment.sourceId, mapped.id);
-    matchedAppointmentIds.add(mapped.id);
-    added += 1;
+  if (!data || !Number.isSafeInteger(data.added) || !Number.isSafeInteger(data.kept) || data.added < 0 || data.kept < 0) {
+    throw new Error("Não foi possível confirmar o resultado. Repita o mesmo arquivo para verificar com segurança.");
   }
-
-  const knownExpenses = [...current.expenses];
-  const matchedExpenseIds = new Set<number>();
-  for (const expense of backup.expenses) {
-    const existing = findImportMatch(knownExpenses, expense, matchedExpenseIds, expenseMatchKey);
-    if (existing) {
-      matchedExpenseIds.add(existing.id);
-      kept += 1;
-      continue;
-    }
-    const result = await supabase.from("expenses").insert({
-      description: expense.description,
-      category: expense.category,
-      expense_date: expense.expenseDate,
-      amount_cents: expense.amountCents,
-    }).select("id,description,category,expense_date,amount_cents").single();
-    fail(result.error);
-    if (!result.data) throw new Error("Não foi possível confirmar um gasto importado.");
-    const inserted = expenseFromRow(result.data as ExpenseRow);
-    knownExpenses.push(inserted);
-    matchedExpenseIds.add(inserted.id);
-    added += 1;
-  }
-
-  const matchedPaymentIds = new Set<number>();
-  for (const payment of backup.payments) {
-    const appointmentId = appointmentIds.get(payment.appointmentId);
-    if (!appointmentId) throw new Error("O backup contém um pagamento sem atendimento correspondente.");
-    const appointment = knownAppointments.find((item) => item.id === appointmentId);
-    if (!appointment) throw new Error("Não foi possível localizar o atendimento de um pagamento.");
-    const existing = findImportMatch(appointment.payments, payment, matchedPaymentIds, paymentMatchKey);
-    if (existing) {
-      matchedPaymentIds.add(existing.id);
-      kept += 1;
-      continue;
-    }
-    const paidCents = appointment.payments.reduce((sum, item) => sum + item.amountCents, 0);
-    if (paidCents + payment.amountCents > appointment.amountCents) {
-      throw new Error(`O pagamento importado de ${appointment.clientName} ultrapassa o valor do atendimento.`);
-    }
-    const result = await supabase.from("payments").insert({
-      appointment_id: appointmentId,
-      amount_cents: payment.amountCents,
-      kind: payment.kind,
-      paid_at: payment.paidAt,
-      note: payment.note || null,
-    }).select("id,amount_cents,kind,paid_at,note").single();
-    fail(result.error);
-    if (!result.data) throw new Error("Não foi possível confirmar um pagamento importado.");
-    const insertedPayment = {
-      id: result.data.id,
-      amountCents: result.data.amount_cents,
-      kind: result.data.kind as PaymentKind,
-      paidAt: result.data.paid_at,
-      note: result.data.note ?? "",
-    };
-    appointment.payments.push(insertedPayment);
-    matchedPaymentIds.add(insertedPayment.id);
-    added += 1;
-  }
-
-  const settingsResult = await supabase.from("studio_settings").select("user_id").maybeSingle();
-  fail(settingsResult.error);
-  if (!settingsResult.data) {
-    const result = await supabase.from("studio_settings").insert({
-      user_id: authData.user.id,
-      monthly_goal_cents: backup.settings.monthlyGoalCents,
-      reserve_percent: backup.settings.reservePercent,
-    });
-    fail(result.error);
-    added += 1;
-  } else {
-    kept += 1;
-  }
-
-  return { added, kept };
+  return { added: data.added, kept: data.kept };
 }
 
 export async function studioRequest(url: string, init?: RequestInit) {

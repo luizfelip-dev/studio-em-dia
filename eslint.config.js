@@ -11,6 +11,10 @@ export default tseslint.config(
   reactHooks.configs.flat.recommended,
   reactRefresh.configs.vite,
   {
+    files: ["tests/**/*.mjs"],
+    languageOptions: { globals: globals.node },
+  },
+  {
     files: ["**/*.{ts,tsx}"],
     languageOptions: {
       ecmaVersion: "latest",

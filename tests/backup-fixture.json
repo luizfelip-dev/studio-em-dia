@@ -1,0 +1,82 @@
+{
+  "format": "studio-em-dia",
+  "version": 1,
+  "exportedAt": "2026-10-27T10:00:00Z",
+  "clients": [
+    {
+      "sourceId": 101,
+      "name": "Cliente fictícia importação",
+      "phone": "11999990000",
+      "notes": "Observação original",
+      "createdAt": "2026-10-27T10:00:00Z"
+    }
+  ],
+  "products": [
+    {
+      "sourceId": 201,
+      "name": "Base fictícia",
+      "purchasePriceCents": 8000,
+      "totalAmount": 30,
+      "unit": "ml",
+      "usePerService": 1
+    },
+    {
+      "sourceId": 202,
+      "name": "Base fictícia",
+      "purchasePriceCents": 8000,
+      "totalAmount": 30,
+      "unit": "ml",
+      "usePerService": 1
+    }
+  ],
+  "appointments": [
+    {
+      "sourceId": 301,
+      "clientId": 101,
+      "clientName": "Cliente fictícia importação",
+      "service": "Maquiagem social",
+      "serviceDate": "2026-10-28",
+      "serviceTime": "14:00",
+      "status": "scheduled",
+      "amountCents": 20000,
+      "productIds": [
+        201,
+        202
+      ],
+      "productCostCents": 534,
+      "extraCostCents": 0,
+      "paymentFeeCents": 0
+    }
+  ],
+  "payments": [
+    {
+      "sourceId": 401,
+      "appointmentId": 301,
+      "amountCents": 5000,
+      "kind": "deposit",
+      "paidAt": "2026-10-27",
+      "note": "Primeiro pagamento"
+    },
+    {
+      "sourceId": 402,
+      "appointmentId": 301,
+      "amountCents": 5000,
+      "kind": "partial",
+      "paidAt": "2026-10-27",
+      "note": "Segundo pagamento"
+    }
+  ],
+  "expenses": [
+    {
+      "sourceId": 501,
+      "description": "Gasto fictício",
+      "category": "Materiais",
+      "expenseDate": "2026-10-27",
+      "amountCents": 1000
+    }
+  ],
+  "settings": {
+    "monthlyGoalCents": 500000,
+    "reservePercent": 10
+  }
+}

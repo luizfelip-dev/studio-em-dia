@@ -46,3 +46,6 @@ next-env.d.ts
 /.codex/
 /outputs/
 /work/
+
+# Estado local do CLI Supabase
+/supabase/.temp/
